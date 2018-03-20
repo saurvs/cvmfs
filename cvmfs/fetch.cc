@@ -74,21 +74,13 @@ Fetcher::ThreadLocalStorage *Fetcher::GetTls() {
 }
 
 
-int Fetcher::Fetch(
-  const shash::Any &id,
-  const uint64_t size,
-  const std::string &name,
-  const zlib::Algorithms compression_algorithm,
-  const CacheManager::ObjectType object_type,
-  const std::string &alt_url,
-  off_t range_offset)
-{
+int Fetcher::Fetch(const FetchJob &job) {
   int fd_return;  // Read-only file descriptor that is returned
   int retval;
 
   // Try to open from local cache
-  if ((fd_return = OpenSelect(id, name, object_type)) >= 0) {
-    LogCvmfs(kLogCache, kLogDebug, "hit: %s", name.c_str());
+  if ((fd_return = OpenSelect(*job.id, *job.name, job.object_type)) >= 0) {
+    LogCvmfs(kLogCache, kLogDebug, "hit: %s", (*job.name).c_str());
     return fd_return;
   }
 
@@ -97,65 +89,65 @@ int Fetcher::Fetch(
   // Synchronization point: either act as a master thread for this object or
   // enqueue to the list of waiting threads.
   pthread_mutex_lock(lock_queues_download_);
-  ThreadQueues::iterator iDownloadQueue = queues_download_.find(id);
+  ThreadQueues::iterator iDownloadQueue = queues_download_.find(*job.id);
   if (iDownloadQueue != queues_download_.end()) {
-    LogCvmfs(kLogCache, kLogDebug, "waiting for download of %s", name.c_str());
+    LogCvmfs(kLogCache, kLogDebug, "waiting for download of %s", (*job.name).c_str());
 
     iDownloadQueue->second->push_back(tls->pipe_wait[1]);
     pthread_mutex_unlock(lock_queues_download_);
     ReadPipe(tls->pipe_wait[0], &fd_return, sizeof(int));
 
     LogCvmfs(kLogCache, kLogDebug, "received from another thread fd %d for %s",
-             fd_return, name.c_str());
+             fd_return, (*job.name).c_str());
     return fd_return;
   } else {
     // Seems we are the first one, check again in the cache (race condition)
-    fd_return = OpenSelect(id, name, object_type);
+    fd_return = OpenSelect(*job.id, *job.name, job.object_type);
     if (fd_return >= 0) {
       pthread_mutex_unlock(lock_queues_download_);
       return fd_return;
     }
 
     // Create a new queue for this chunk
-    queues_download_[id] = &tls->other_pipes_waiting;
+    queues_download_[*job.id] = &tls->other_pipes_waiting;
     pthread_mutex_unlock(lock_queues_download_);
   }
 
   perf::Inc(n_downloads);
 
   // Involve the download manager
-  LogCvmfs(kLogCache, kLogDebug, "downloading %s", name.c_str());
+  LogCvmfs(kLogCache, kLogDebug, "downloading %s", (*job.name).c_str());
   std::string url;
   if (external_) {
-    url = !alt_url.empty() ? alt_url : name;
+    url = !(*job.alt_url).empty() ? *job.alt_url : *job.name;
   } else {
-    url = "/" + (alt_url.size() ? alt_url : "data/" + id.MakePath());
+    url = "/" + ((*job.alt_url).size() ? *job.alt_url : "data/" + (*job.id).MakePath());
   }
   void *txn = alloca(cache_mgr_->SizeOfTxn());
-  retval = cache_mgr_->StartTxn(id, size, txn);
+  retval = cache_mgr_->StartTxn(*job.id, job.size, txn);
   if (retval < 0) {
     LogCvmfs(kLogCache, kLogDebug, "could not start transaction on %s",
-             name.c_str());
-    SignalWaitingThreads(retval, id, tls);
+             (*job.name).c_str());
+    SignalWaitingThreads(retval, *job.id, tls);
     return retval;
   }
-  cache_mgr_->CtrlTxn(CacheManager::ObjectInfo(object_type, name), 0, txn);
+  cache_mgr_->CtrlTxn(CacheManager::ObjectInfo(job.object_type, *job.name), 0, txn);
 
-  LogCvmfs(kLogCache, kLogDebug, "miss: %s %s", name.c_str(), url.c_str());
+  LogCvmfs(kLogCache, kLogDebug, "miss: %s %s", (*job.name).c_str(), url.c_str());
   TransactionSink sink(cache_mgr_, txn);
   tls->download_job.url = &url;
   tls->download_job.destination_sink = &sink;
-  tls->download_job.expected_hash = &id;
-  tls->download_job.extra_info = &name;
+  tls->download_job.expected_hash = job.id;
+  tls->download_job.extra_info = job.name;
   ClientCtx *ctx = ClientCtx::GetInstance();
   if (ctx->IsSet()) {
     ctx->Get(&tls->download_job.uid,
              &tls->download_job.gid,
              &tls->download_job.pid);
   }
-  tls->download_job.compressed = (compression_algorithm == zlib::kZlibDefault);
-  tls->download_job.range_offset = range_offset;
-  tls->download_job.range_size = size;
+  tls->download_job.compressed = (job.compression_algorithm == zlib::kZlibDefault);
+  tls->download_job.range_offset = job.range_offset;
+  tls->download_job.range_size = job.size;
   download_mgr_->Fetch(&tls->download_job);
 
   if (tls->download_job.error_code == download::kFailOk) {
@@ -164,28 +156,28 @@ int Fetcher::Fetch(
     fd_return = cache_mgr_->OpenFromTxn(txn);
     if (fd_return < 0) {
       cache_mgr_->AbortTxn(txn);
-      SignalWaitingThreads(fd_return, id, tls);
+      SignalWaitingThreads(fd_return, *job.id, tls);
       return fd_return;
     }
 
     retval = cache_mgr_->CommitTxn(txn);
     if (retval < 0) {
       cache_mgr_->Close(fd_return);
-      SignalWaitingThreads(retval, id, tls);
+      SignalWaitingThreads(retval, *job.id, tls);
       return retval;
     }
-    SignalWaitingThreads(fd_return, id, tls);
+    SignalWaitingThreads(fd_return, *job.id, tls);
     return fd_return;
   }
 
   // Download failed
   LogCvmfs(kLogCache, kLogDebug | kLogSyslogErr,
-           "failed to fetch %s (hash: %s, error %d [%s])", name.c_str(),
-           id.ToString().c_str(), tls->download_job.error_code,
+           "failed to fetch %s (hash: %s, error %d [%s])", (*job.name).c_str(),
+           (*job.id).ToString().c_str(), tls->download_job.error_code,
            download::Code2Ascii(tls->download_job.error_code));
   cache_mgr_->AbortTxn(txn);
   backoff_throttle_->Throttle();
-  SignalWaitingThreads(-EIO, id, tls);
+  SignalWaitingThreads(-EIO, *job.id, tls);
   return -EIO;
 }
 

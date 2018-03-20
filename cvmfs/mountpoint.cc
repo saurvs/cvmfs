@@ -1465,12 +1465,9 @@ bool MountPoint::FetchHistory(std::string *history_path) {
     return false;
   }
 
-  int fd = fetcher_->Fetch(
-    history_hash,
-    CacheManager::kSizeUnknown,
-    "tag database for " + fqrn_,
-    zlib::kZlibDefault,
-    CacheManager::kTypeRegular);
+  cvmfs::FetchJob job(history_hash, CacheManager::kSizeUnknown,
+    "tag database for " + fqrn_, zlib::kZlibDefault, CacheManager::kTypeRegular);
+  int fd = fetcher_->Fetch(job);
   if (fd < 0) {
     boot_error_ = "failed to download history: " + StringifyInt(-fd);
     boot_status_ = loader::kFailHistory;

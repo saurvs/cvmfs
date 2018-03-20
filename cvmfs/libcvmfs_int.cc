@@ -416,12 +416,10 @@ int LibContext::Open(const char *c_path) {
   cvmfs::Fetcher *this_fetcher = dirent.IsExternalFile()
     ? mount_point_->external_fetcher()
     : mount_point_->fetcher();
-  fd = this_fetcher->Fetch(
-    dirent.checksum(),
-    dirent.size(),
-    string(path.GetChars(), path.GetLength()),
-    dirent.compression_algorithm(),
+  cvmfs::FetchJob job(dirent.checksum(), dirent.size(),
+    string(path.GetChars(), path.GetLength()), dirent.compression_algorithm(),
     CacheManager::kTypeRegular);
+  fd = this_fetcher->Fetch(job);
   perf::Inc(file_system()->n_fs_open());
 
   if (fd >= 0) {
@@ -468,22 +466,16 @@ int64_t LibContext::Pread(
       ChunkFd *chunk_fd = open_chunks.chunk_fd;
       if ((chunk_fd->fd == -1) || (chunk_fd->chunk_idx != chunk_idx)) {
         if (chunk_fd->fd != -1) file_system()->cache_mgr()->Close(chunk_fd->fd);
-        if (open_chunks.chunk_reflist.external_data) {
-          chunk_fd->fd = mount_point_->external_fetcher()->Fetch(
-            chunk_list->AtPtr(chunk_idx)->content_hash(),
-            chunk_list->AtPtr(chunk_idx)->size(),
-            "no path info",
-            compression_alg,
-            CacheManager::kTypeRegular,
-            open_chunks.chunk_reflist.path.ToString(),
-            chunk_list->AtPtr(chunk_idx)->offset());
-        } else {
-          chunk_fd->fd = mount_point_->fetcher()->Fetch(
-            chunk_list->AtPtr(chunk_idx)->content_hash(),
-            chunk_list->AtPtr(chunk_idx)->size(),
-            "no path info",
-            compression_alg,
+        cvmfs::FetchJob job(chunk_list->AtPtr(chunk_idx)->content_hash(),
+            chunk_list->AtPtr(chunk_idx)->size(), "no path info", compression_alg,
             CacheManager::kTypeRegular);
+        if (open_chunks.chunk_reflist.external_data) {
+          std::string alt_url = open_chunks.chunk_reflist.path.ToString();
+          job.alt_url = &alt_url;
+          job.range_offset = chunk_list->AtPtr(chunk_idx)->offset();
+          chunk_fd->fd = mount_point_->external_fetcher()->Fetch(job);
+        } else {
+          chunk_fd->fd = mount_point_->fetcher()->Fetch(job);
         }
         if (chunk_fd->fd < 0) {
           chunk_fd->fd = -1;

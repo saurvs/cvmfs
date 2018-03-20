@@ -913,14 +913,13 @@ static void cvmfs_open(fuse_req_t req, fuse_ino_t ino,
   Fetcher *this_fetcher = dirent.IsExternalFile()
     ? mount_point_->external_fetcher()
     : mount_point_->fetcher();
-  fd = this_fetcher->Fetch(
-    dirent.checksum(),
-    dirent.size(),
-    string(path.GetChars(), path.GetLength()),
-    dirent.compression_algorithm(),
+  cvmfs::FetchJob job(dirent.checksum(), dirent.size(),
+    string(path.GetChars(), path.GetLength()), dirent.compression_algorithm(),
     mount_point_->catalog_mgr()->volatile_flag()
       ? CacheManager::kTypeVolatile
-      : CacheManager::kTypeRegular);
+      : CacheManager::kTypeRegular
+  );
+  fd = this_fetcher->Fetch(job);
 
   if (fd >= 0) {
     if (perf::Xadd(file_system_->no_open_files(), 1) <
@@ -1014,27 +1013,20 @@ static void cvmfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
       // Open file descriptor to chunk
       if ((chunk_fd.fd == -1) || (chunk_fd.chunk_idx != chunk_idx)) {
         if (chunk_fd.fd != -1) file_system_->cache_mgr()->Close(chunk_fd.fd);
-        string verbose_path = "Part of " + chunks.path.ToString();
+        cvmfs::FetchJob job(chunks.list->AtPtr(chunk_idx)->content_hash(),
+          chunks.list->AtPtr(chunk_idx)->size(),
+          "Part of " + chunks.path.ToString(), chunks.compression_alg,
+          mount_point_->catalog_mgr()->volatile_flag()
+            ? CacheManager::kTypeVolatile
+            : CacheManager::kTypeRegular
+        );
         if (chunks.external_data) {
-          chunk_fd.fd = mount_point_->external_fetcher()->Fetch(
-            chunks.list->AtPtr(chunk_idx)->content_hash(),
-            chunks.list->AtPtr(chunk_idx)->size(),
-            verbose_path,
-            chunks.compression_alg,
-            mount_point_->catalog_mgr()->volatile_flag()
-              ? CacheManager::kTypeVolatile
-              : CacheManager::kTypeRegular,
-            chunks.path.ToString(),
-            chunks.list->AtPtr(chunk_idx)->offset());
+          std::string alt_url = chunks.path.ToString();
+          job.alt_url = &alt_url;
+          job.range_offset = chunks.list->AtPtr(chunk_idx)->offset();
+          chunk_fd.fd = mount_point_->external_fetcher()->Fetch(job);
         } else {
-          chunk_fd.fd = mount_point_->fetcher()->Fetch(
-            chunks.list->AtPtr(chunk_idx)->content_hash(),
-            chunks.list->AtPtr(chunk_idx)->size(),
-            verbose_path,
-            chunks.compression_alg,
-            mount_point_->catalog_mgr()->volatile_flag()
-              ? CacheManager::kTypeVolatile
-              : CacheManager::kTypeRegular);
+          chunk_fd.fd = mount_point_->fetcher()->Fetch(job);
         }
         if (chunk_fd.fd < 0) {
           chunk_fd.fd = -1;
@@ -1607,22 +1599,16 @@ bool Pin(const string &path) {
       if (!retval)
         return false;
       int fd = -1;
+      cvmfs::FetchJob job(chunks.AtPtr(i)->content_hash(),
+        chunks.AtPtr(i)->size(), "Part of " + path,
+        dirent.compression_algorithm(), CacheManager::kTypePinned
+      );
       if (dirent.IsExternalFile()) {
-        fd = mount_point_->external_fetcher()->Fetch(
-          chunks.AtPtr(i)->content_hash(),
-          chunks.AtPtr(i)->size(),
-          "Part of " + path,
-          dirent.compression_algorithm(),
-          CacheManager::kTypePinned,
-          path,
-          chunks.AtPtr(i)->offset());
+        job.alt_url = &path;
+        job.range_offset = chunks.AtPtr(i)->offset();
+        fd = mount_point_->external_fetcher()->Fetch(job);
       } else {
-        fd = mount_point_->fetcher()->Fetch(
-          chunks.AtPtr(i)->content_hash(),
-          chunks.AtPtr(i)->size(),
-          "Part of " + path,
-          dirent.compression_algorithm(),
-          CacheManager::kTypePinned);
+        fd = mount_point_->fetcher()->Fetch(job);
       }
       if (fd < 0) {
         return false;
@@ -1639,9 +1625,9 @@ bool Pin(const string &path) {
   Fetcher *this_fetcher = dirent.IsExternalFile()
     ? mount_point_->external_fetcher()
     : mount_point_->fetcher();
-  int fd = this_fetcher->Fetch(
-    dirent.checksum(), dirent.size(), path, dirent.compression_algorithm(),
-    CacheManager::kTypePinned);
+  cvmfs::FetchJob job(dirent.checksum(), dirent.size(), path,
+    dirent.compression_algorithm(), CacheManager::kTypePinned);
+  int fd = this_fetcher->Fetch(job);
   if (fd < 0) {
     return false;
   }

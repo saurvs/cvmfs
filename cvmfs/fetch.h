@@ -51,6 +51,29 @@ class TransactionSink : public Sink {
 
 
 /**
+ * Contains all the information to specify a fetch job.
+ */
+struct FetchJob {
+  const shash::Any *id;
+  uint64_t size;
+  const std::string *name;
+  zlib::Algorithms compression_algorithm;
+  CacheManager::ObjectType object_type;
+  const std::string *alt_url;
+  off_t range_offset;
+
+  FetchJob(const shash::Any &i,
+          const uint64_t s,
+          const std::string &n,
+          const zlib::Algorithms c,
+          const CacheManager::ObjectType o,
+          const std::string &a = "",
+          off_t r = -1) : id(&i), size(s), name(&n), compression_algorithm(c),
+                          object_type(o), alt_url(&a), range_offset(r) {}
+};  // FetchJob
+
+
+/**
  * The Fetcher uses a cache manager and a download manager in order to provide a
  * (virtual) file descriptor to a requested object, which is valid in the
  * context of the cache manager.
@@ -73,14 +96,8 @@ class Fetcher : SingleCopy {
           perf::StatisticsTemplate statistics,
           bool external_data = false);
   ~Fetcher();
-  // TODO(jblomer): reduce number of arguments
-  int Fetch(const shash::Any &id,
-            const uint64_t size,
-            const std::string &name,
-            const zlib::Algorithms compression_algorithm,
-            const CacheManager::ObjectType object_type,
-            const std::string &alt_url = "",
-            off_t range_offset = -1);
+
+  int Fetch(const FetchJob &job);
 
   CacheManager *cache_mgr() { return cache_mgr_; }
   download::DownloadManager *download_mgr() { return download_mgr_; }
