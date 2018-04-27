@@ -1,4 +1,27 @@
 2.5.0:
+  * Check for autofs in cvmfs_server rmfs only for stratum 0s (CVM-1490)
+  * React on change of DNS server on Linux (CVM-496)
+  * Fix catalog checksum destination from cwd to workspace (CVM-962)
+  * Use `systemd start <mount unit>` in suid helper if applicable (CVM-1398)
+  * Set httpd selinux label for GeoIP database (CVM-1454)
+  * Make CVMFS_GENERATE_LEGACY_BULK_CHUNKS=false the default (CVM-1429)
+  * Run automatic garbage collection with frequency controlled by the
+    CVMFS_AUTO_GC_LAPSE parameter (CVM-1400)
+  * Fix use of short term TTL when the manifest cannot be downloaded
+  * Fix crash on `cvmfs_talk remount` with fixed catalogs
+  * Send offline mode enter/recover events to syslog (CVM-1497)
+  * Sanitize repository names in cvmfs_server (CVM-1389)
+  * Use /etc/auto.master.d/cvmfs.autofs if applicable (CVM-675)
+  * Add functionality to print the hierarchy of branches (CVM-1392)
+  * Fix error message when trying to mount an already mounted repo (CVM-1477)
+  * Fix transaction abort with many temporary files (CVM-1390)
+  * Fix garbage collection of idle repositories (CVM-1460)
+  * Place bootstrapping symlinks on replica storage (CVM-1366)
+  * Improve CPU utilization when downloading with limited bandwidth (CVM-1480)
+  * Use lazy unmount as a last resort in `cvmfs_config killall` (CVM-1465)
+  * Add CloudFlare support to GeoAPI (CVM-1468)
+  * Fix warnings in cvmfs_server on bash >= 4.4 (CVM-1401)
+  * Create libcvmfs.a and libcvmfs_cache.a on macOS (CVM-1489)
   * Set default cache limit to 20G on macOS
   * Fix statvfs for cache size >4G on macOS (CVM-1474)
   * Add support for diff snapshots based on root hash (CVM-1452)

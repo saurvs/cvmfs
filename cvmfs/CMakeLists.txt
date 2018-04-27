@@ -76,9 +76,14 @@ set (CVMFS_CLIENT_SOURCES
   xattr.cc
   )
 
-if (MACOSX)
+if (APPLE)
   list(APPEND CVMFS_CLIENT_SOURCES file_watcher_kqueue.cc)
-endif (MACOSX)
+else(APPLE)
+  if (CVMFS_ENABLE_INOTIFY)
+    list(APPEND CVMFS_CLIENT_SOURCES file_watcher_inotify.cc)
+    add_definitions(-DCVMFS_ENABLE_INOTIFY)
+  endif(CVMFS_ENABLE_INOTIFY)
+endif (APPLE)
 
 # First .h then .cc is important to avoid races during the build process
 set_source_files_properties(cache.pb.h cache.pb.cc
@@ -152,6 +157,7 @@ set (CVMFS_CACHE_RAM_SOURCES
   malloc_heap.cc
   statistics.cc
   util_concurrency.cc
+  util/posix.cc
   util/string.cc
 )
 
@@ -167,6 +173,7 @@ set (CVMFS_FSCK_SOURCES
 
 
 set (CVMFS_SWISSKNIFE_SOURCES
+  backoff.cc
   catalog.cc
   catalog_counters.cc
   catalog_mgr_ro.cc
@@ -187,6 +194,7 @@ set (CVMFS_SWISSKNIFE_SOURCES
   history_sqlite.cc
   ingestion/chunk_detector.cc
   ingestion/item.cc
+  ingestion/item_mem.cc
   ingestion/pipeline.cc
   ingestion/task_chunk.cc
   ingestion/task_compress.cc
@@ -262,15 +270,23 @@ set (CVMFS_SWISSKNIFE_SOURCES
   xattr.cc
 )
 
+# Lower optimization level for this file. Xcode 9.3+ gives different results in Os and above
+if (CVMFS_BUGGY_XCODE)
+  set_property(SOURCE ingestion/chunk_detector.cc PROPERTY COMPILE_FLAGS -O0)
+endif(CVMFS_BUGGY_XCODE)
+
 set (CVMFS_SWISSKNIFE_DEBUG_SOURCES
   ${CVMFS_SWISSKNIFE_SOURCES}
 )
 
 set (CVMFS_SUID_HELPER_SOURCES
-  cvmfs_suid_helper.cc sanitizer.cc
+  cvmfs_suid_helper.cc
+  cvmfs_suid_util.cc
+  sanitizer.cc
 )
 
 set (CVMFS_PRELOADER_SOURCES
+  backoff.cc
   catalog.cc
   catalog_sql.cc
   compression.cc
@@ -283,6 +299,7 @@ set (CVMFS_PRELOADER_SOURCES
   history_sqlite.cc
   ingestion/chunk_detector.cc
   ingestion/item.cc
+  ingestion/item_mem.cc
   ingestion/pipeline.cc
   ingestion/task_chunk.cc
   ingestion/task_compress.cc
@@ -364,6 +381,7 @@ if(BUILD_RECEIVER)
     receiver/reactor.cc
     receiver/receiver.cc
     receiver/session_token.cc
+    backoff.cc
     catalog.cc
     catalog_rw.cc
     catalog_counters.cc
@@ -382,6 +400,7 @@ if(BUILD_RECEIVER)
     history_sqlite.cc
     ingestion/chunk_detector.cc
     ingestion/item.cc
+    ingestion/item_mem.cc
     ingestion/pipeline.cc
     ingestion/task_chunk.cc
     ingestion/task_compress.cc
@@ -543,23 +562,35 @@ if (BUILD_LIBCVMFS_CACHE)
   add_library (cvmfs_cache_only STATIC ${LIBCVMFS_CACHE_SOURCES})
   add_dependencies (cvmfs_cache_only cache.pb.generated)
   set (LIBCVMFS_CACHE_LIBS ${SHA3_LIBRARIES} ${PROTOBUF_LITE_LIBRARY}
-                           ${LIBCVMFS_CACHE_LIBS}
-                           ${CMAKE_CURRENT_BINARY_DIR}/libcvmfs_cache_only.a)
+    ${LIBCVMFS_CACHE_LIBS} ${CMAKE_CURRENT_BINARY_DIR}/libcvmfs_cache_only.a)
+  if (MACOSX)
+    list(APPEND LIBCVMFS_CACHE_LIBS ${OPENSSL_LIBRARIES})
+  endif (MACOSX)
+
   set_target_properties (cvmfs_cache_only PROPERTIES COMPILE_FLAGS
                          "${LIBCVMFS_CACHE_CFLAGS}")
   target_link_libraries(cvmfs_cache_only ${LIBCVMFS_CACHE_LIBS})
-  if (NOT MACOSX)
-    # We do not (yet) have a recipe for localizing private symbols
-    # in Mac OS X, so skip that step on Mac
-    #set (LIBCVMFS_CACHE_PUBLIC_SYMS "-public" "${CMAKE_CURRENT_SOURCE_DIR}/cache_plugin/libcvmfs_cache_public_syms.txt")
-  endif (NOT MACOSX)
 
-  add_custom_command(
-      OUTPUT libcvmfs_cache.a
-      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/combine_libs ${LIBCVMFS_CACHE_PUBLIC_SYMS} libcvmfs_cache.a ${LIBCVMFS_CACHE_LIBS}
-      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      DEPENDS ${LIBCVMFS_CACHE_LIBS}
-    )
+  # Note: it would be a good idea to try to unify the next block for macOS and Linux.
+  #       It may be possible to use libtool on both platforms, including the ability
+  #       to hide private symbols in the library - which is currently done by the
+  #       `combine_libs` script, on Linux only.
+  if (MACOSX)
+    add_custom_command(
+        OUTPUT libcvmfs_cache.a
+        COMMAND libtool -static -o libcvmfs_cache.a ${LIBCVMFS_CACHE_LIBS}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        DEPENDS ${LIBCVMFS_CACHE_LIBS}
+      )
+  else (MACOSX)
+    set (LIBCVMFS_CACHE_PUBLIC_SYMS "-public" "${CMAKE_CURRENT_SOURCE_DIR}/cache_plugin/libcvmfs_cache_public_syms.txt")
+    add_custom_command(
+        OUTPUT libcvmfs_cache.a
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/combine_libs ${LIBCVMFS_CACHE_PUBLIC_SYMS} libcvmfs_cache.a ${LIBCVMFS_CACHE_LIBS}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        DEPENDS ${LIBCVMFS_CACHE_LIBS}
+      )
+  endif (MACOSX)
 
   # dummy target to cause merged libcvmfs_cache to be produced
   add_custom_target (libcvmfs_cache ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libcvmfs_cache.a)
@@ -597,18 +628,26 @@ if (BUILD_LIBCVMFS)
   set_target_properties (cvmfs_only PROPERTIES COMPILE_FLAGS "${LIBCVMFS_CFLAGS}")
   target_link_libraries(cvmfs_only ${LIBCVMFS_LIBS})
 
-  if (NOT MACOSX)
-    # We do not (yet) have a recipe for localizing private symbols
-    # in Mac OS X, so skip that step on Mac
+  # Note: it would be a good idea to try to unify the next block for macOS and Linux.
+  #       It may be possible to use libtool on both platforms, including the ability
+  #       to hide private symbols in the library - which is currently done by the
+  #       `combine_libs` script, on Linux only.
+  if (MACOSX)
+    add_custom_command(
+        OUTPUT libcvmfs.a
+        COMMAND libtool -static -o libcvmfs.a ${LIBCVMFS_LIBS}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        DEPENDS ${LIBCVMFS_LIBS}
+    )
+  else (MACOSX)
     set (LIBCVMFS_PUBLIC_SYMS "-public" "${CMAKE_CURRENT_SOURCE_DIR}/libcvmfs_public_syms.txt")
-  endif (NOT MACOSX)
-
-  add_custom_command(
-      OUTPUT libcvmfs.a
-      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/combine_libs ${LIBCVMFS_PUBLIC_SYMS} libcvmfs.a ${LIBCVMFS_LIBS}
-      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      DEPENDS ${LIBCVMFS_LIBS}
-  )
+    add_custom_command(
+        OUTPUT libcvmfs.a
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/combine_libs ${LIBCVMFS_PUBLIC_SYMS} libcvmfs.a ${LIBCVMFS_LIBS}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        DEPENDS ${LIBCVMFS_LIBS}
+    )
+  endif (MACOSX)
 
   # dummy target to cause merged libcvmfs to be produced
   add_custom_target (libcvmfs ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libcvmfs.a)

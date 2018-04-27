@@ -171,8 +171,7 @@ cvmfs_server_mkfs() {
   check_parameter_count 1 $#
   name=$(get_repository_name $1)
 
-  [ $(echo -n "$name" | wc -c) -gt 60 ] && \
-    die "repository name longer than 60 characters"
+  is_valid_repo_name "$name" || die "invalid repository name: $name"
 
   # default values
   [ x"$unionfs"   = x"" ] && unionfs="$(get_available_union_fs)"
@@ -225,9 +224,11 @@ cvmfs_server_mkfs() {
   local keys_location="/etc/cvmfs/keys"
   mkdir -p $keys_location
   local upstream_type=$(get_upstream_type $upstream)
-  local keys="${name}.key ${name}.crt ${name}.pub"
+  local keys="${name}.crt ${name}.pub"
   if [ x"$upstream_type" = xgw ]; then
       keys="$keys ${name}.gw"
+  else
+      keys="$keys ${name}.key"
   fi
   if [ $require_masterkeycard -eq 1 ]; then
       local reason
@@ -235,7 +236,9 @@ cvmfs_server_mkfs() {
   elif masterkeycard_cert_available >/dev/null; then
       require_masterkeycard=1
   else
-      keys="${name}.masterkey $keys"
+      if [ x"$upstream_type" != xgw ]; then
+          keys="${name}.masterkey $keys"
+      fi
   fi
   local keys_are_there=0
   for k in $keys; do

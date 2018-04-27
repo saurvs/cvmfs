@@ -54,7 +54,6 @@ set(CVMFS_UNITTEST_FILES
   t_file_chunk.cc
   t_file_guard.cc
   t_file_sandbox.cc
-  t_file_watcher.cc
   t_fs_traversal.cc
   t_fuse_evict.cc
   t_garbage_collector.cc
@@ -100,6 +99,7 @@ set(CVMFS_UNITTEST_FILES
   t_sqlite_database.cc
   t_sqlitemem.cc
   t_statistics.cc
+  t_suid_util.cc
   t_swissknife_lease.cc
   t_synchronizing_counter.cc
   t_raii_temp_dir.cc
@@ -151,6 +151,7 @@ set (CVMFS_UNITTEST_SOURCES
   ${CVMFS_SOURCE_DIR}/catalog_virtual.cc
   ${CVMFS_SOURCE_DIR}/clientctx.cc
   ${CVMFS_SOURCE_DIR}/compression.cc
+  ${CVMFS_SOURCE_DIR}/cvmfs_suid_util.cc
   ${CVMFS_SOURCE_DIR}/dns.cc
   ${CVMFS_SOURCE_DIR}/download.cc
   ${CVMFS_SOURCE_DIR}/directory_entry.cc
@@ -167,6 +168,7 @@ set (CVMFS_UNITTEST_SOURCES
   ${CVMFS_SOURCE_DIR}/history_sqlite.cc
   ${CVMFS_SOURCE_DIR}/ingestion/chunk_detector.cc
   ${CVMFS_SOURCE_DIR}/ingestion/item.cc
+  ${CVMFS_SOURCE_DIR}/ingestion/item_mem.cc
   ${CVMFS_SOURCE_DIR}/ingestion/pipeline.cc
   ${CVMFS_SOURCE_DIR}/ingestion/task_chunk.cc
   ${CVMFS_SOURCE_DIR}/ingestion/task_compress.cc
@@ -243,8 +245,19 @@ set (CVMFS_UNITTEST_SOURCES
   cache.pb.cc cache.pb.h
 )
 
+# Lower optimization level for this file. Xcode 9.3+ gives different results in Os and above
+if (CVMFS_BUGGY_XCODE)
+  set_property(SOURCE ${CVMFS_SOURCE_DIR}/ingestion/chunk_detector.cc PROPERTY COMPILE_FLAGS -O0)
+endif(CVMFS_BUGGY_XCODE)
+
+# The FileWatcher unit test only makes sense on macOS or on Linux versions which support inotify (inotify)
 if (APPLE)
-    list(APPEND CVMFS_UNITTEST_SOURCES ${CVMFS_SOURCE_DIR}/file_watcher_kqueue.cc)
+  list(APPEND CVMFS_UNITTEST_SOURCES ${CVMFS_SOURCE_DIR}/file_watcher_kqueue.cc t_file_watcher.cc)
+else (APPLE)
+  if (CVMFS_ENABLE_INOTIFY)
+    list(APPEND CVMFS_UNITTEST_SOURCES ${CVMFS_SOURCE_DIR}/file_watcher_inotify.cc t_file_watcher.cc)
+    add_definitions(-DCVMFS_ENABLE_INOTIFY)
+  endif(CVMFS_ENABLE_INOTIFY)
 endif(APPLE)
 
 set (CVMFS_UNITTEST_DEBUG_SOURCES ${CVMFS_UNITTEST_SOURCES})
@@ -335,7 +348,7 @@ endif (BUILD_LIBCVMFS_CACHE)
 #
 # link the stuff (*_LIBRARIES are dynamic link libraries)
 #
-set (UNITTEST_LINK_LIBRARIES ${GTEST_LIBRARIES} ${GMOCK_LIBRARIES} 
+set (UNITTEST_LINK_LIBRARIES ${GTEST_LIBRARIES} ${GMOCK_LIBRARIES}
                              ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES}
                              ${CARES_LIBRARIES} ${OPENSSL_LIBRARIES}
                              ${SQLITE3_LIBRARY} ${ZLIB_LIBRARIES} ${RT_LIBRARY}

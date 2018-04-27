@@ -84,3 +84,21 @@ if (BUILD_COVERAGE AND NOT USING_CLANG)
   set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fprofile-arcs -ftest-coverage")
   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -g -fprofile-arcs -ftest-coverage -fPIC")
 endif (BUILD_COVERAGE AND NOT USING_CLANG)
+
+# Check for a potentially buggy Xcode version
+if(NOT CMAKE_CXX_COMPILER_VERSION) # work around for cmake versions smaller than 2.8.10
+  execute_process(COMMAND ${CMAKE_CXX_COMPILER} -dumpversion OUTPUT_VARIABLE CMAKE_CXX_COMPILER_VERSION)
+endif()
+if (APPLE AND ${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang" AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER 9.1.0.0)
+  message("Xcode version 9.3 or newer detected")
+  set (CVMFS_BUGGY_XCODE ON)
+endif()
+
+# Check for old Linux version that don't have a complete inotify implementation
+if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+  try_compile(HAS_INOTIFY_INIT1 ${CMAKE_BINARY_DIR} ${PROJECT_SOURCE_DIR}/cmake/check_inotify_init1.c)
+  if(HAS_INOTIFY_INIT1)
+    message("Enable inotify support")
+    set(CVMFS_ENABLE_INOTIFY ON)
+  endif(HAS_INOTIFY_INIT1)
+endif(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
